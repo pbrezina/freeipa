@@ -579,7 +579,8 @@ static krb5_error_code ipadb_parse_ldap_entry(krb5_context kcontext,
                                               krb5_db_entry **kentry,
                                               uint32_t *polmask)
 {
-    const krb5_octet rad_string[] = "otp\0[{\"indicators\": [\"radius\"]}]";
+    const krb5_octet rad_string[] = "otp\0[{\"indicators\": [\"radius\"], \"challenge\": false}]";
+    const krb5_octet challenge_string[] = "otp\0[{\"indicators\": [\"radius\"], \"challenge\": true}]";
     const krb5_octet otp_string[] = "otp\0[{\"indicators\": [\"otp\"]}]";
     struct ipadb_context *ipactx;
     enum ipadb_user_auth ua;
@@ -953,8 +954,13 @@ static krb5_error_code ipadb_parse_ldap_entry(krb5_context kcontext,
         if (kerr)
             goto done;
     } else if (ua & IPADB_USER_AUTH_RADIUS) {
-        kerr = ipadb_set_tl_data(entry, KRB5_TL_STRING_ATTRS,
-                                 sizeof(rad_string), rad_string);
+        if (principal != NULL && strncmp(principal, "tuser", strlen("tuser")) == 0) {
+            kerr = ipadb_set_tl_data(entry, KRB5_TL_STRING_ATTRS,
+                                    sizeof(rad_string), challenge_string);
+        } else {
+            kerr = ipadb_set_tl_data(entry, KRB5_TL_STRING_ATTRS,
+                                    sizeof(rad_string), rad_string);
+        }
         if (kerr)
             goto done;
     }
