@@ -102,6 +102,12 @@ const char *otpd_parse_user(LDAP *ldp, LDAPMessage *entry,
   if (i != 0)
       return strerror(i);
 
+  item->user.type = NULL;
+  i = get_string(ldp, entry, "ipaUserAuthType",
+                 &item->user.type);
+  if (i != 0 && i != ENOENT)
+      return strerror(i);
+
   i = get_string(ldp, entry, "ipatokenRadiusUserName",
                  &item->user.ipatokenRadiusUserName);
   if (i != 0 && i != ENOENT)

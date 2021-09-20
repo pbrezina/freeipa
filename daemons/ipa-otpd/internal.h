@@ -48,6 +48,7 @@ struct otpd_queue_item {
         char *uid;
         char *ipatokenRadiusUserName;
         char *ipatokenRadiusConfigLink;
+        char *type;
         char *other;
     } user;
 

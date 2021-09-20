@@ -326,21 +326,23 @@ static void ipadb_validate_idp(struct ipadb_context *ipactx,
                                LDAPMessage *lentry,
                                enum ipadb_user_auth *ua)
 {
-    struct berval **vals;
+    //struct berval **vals;
 
     if (!(*ua & IPADB_USER_AUTH_IDP))
         return;
 
-    /* Ensure that the user has a link to an IdP config. */
-    vals = ldap_get_values_len(ipactx->lcontext, lentry,
-                               "ipaIdpConfigLink");
-    if (vals == NULL || vals[0] == NULL)
-        *ua &= ~IPADB_USER_AUTH_IDP;
-    else
-        *ua = IPADB_USER_AUTH_IDP;
+    return;
 
-    if (vals != NULL)
-        ldap_value_free_len(vals);
+    /* Ensure that the user has a link to an IdP config. */
+    // vals = ldap_get_values_len(ipactx->lcontext, lentry,
+    //                            "ipaIdpConfigLink");
+    // if (vals == NULL || vals[0] == NULL)
+    //     *ua &= ~IPADB_USER_AUTH_IDP;
+    // else
+    //     *ua = IPADB_USER_AUTH_IDP;
+
+    // if (vals != NULL)
+    //     ldap_value_free_len(vals);
 }
 
 static enum ipadb_user_auth ipadb_get_user_auth(struct ipadb_context *ipactx,
@@ -608,7 +610,7 @@ static krb5_error_code ipadb_parse_ldap_entry(krb5_context kcontext,
 {
     const krb5_octet rad_string[] = "otp\0[{\"indicators\": [\"radius\"], \"challenge\": false}]";
     const krb5_octet otp_string[] = "otp\0[{\"indicators\": [\"otp\"], \"challenge\": false}]";
-    const krb5_octet idp_string[] = "otp\0[{\"indicators\": [\"idp\"], \"challenge\": true}]";
+    const krb5_octet idp_string[] = "sssd-oauth2\0{}";
     struct ipadb_context *ipactx;
     enum ipadb_user_auth ua;
     LDAP *lcontext;

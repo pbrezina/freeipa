@@ -37,6 +37,7 @@
 
 static char *user[] = {
     "uid",
+    "ipaUserAuthType",
     "ipatokenRadiusUserName",
     "ipatokenRadiusConfigLink",
     NULL
@@ -113,6 +114,80 @@ static void on_query_writable(verto_ctx *vctx, verto_ev *ev)
 
 error:
     otpd_queue_push(push, item);
+}
+
+static krb5_error_code otpd_mock_idp(struct otpd_queue_item **item)
+{
+    const krb5_data *password;
+    krb5_error_code retval;
+    krad_attrset *attrs;
+    krb5_data data;
+
+    otpd_log_req((*item)->req, "mocking idp start");
+
+    retval = krad_attrset_new(ctx.kctx, &attrs);
+    if (retval != 0) {
+        otpd_log_err(retval, "Unable to create new attribute set");
+        return retval;
+    }
+
+    password = krad_packet_get_attr((*item)->req, krad_attr_name2num("User-Password"), 0);
+    if (password == NULL) {
+        otpd_log_req((*item)->req, "mock access-challenge");
+
+        data.magic = 0;
+        data.data = "My State";
+        data.length = strlen(data.data);
+        retval = krad_attrset_add(attrs, krad_attr_name2num("State"), &data);
+        if (retval != 0) {
+            otpd_log_err(retval, "Unable to add State to attribute set");
+            goto error;
+        }
+
+        data.magic = 0;
+        data.data = "sssd-oauth2 {\"version\": 1, \"url\": \"https://visit.me\", \"pin\": \"123456\"}";
+        data.length = strlen(data.data);
+        retval = krad_attrset_add(attrs, krad_attr_name2num("Reply-Message"), &data);
+        if (retval != 0) {
+            otpd_log_err(retval, "Unable to add State to attribute set");
+            goto error;
+        }
+
+        (*item)->sent = 0;
+        retval = krad_packet_new_response(ctx.kctx, SECRET,
+                                          krad_code_name2num("Access-Challenge"),
+                                          attrs, (*item)->req, &(*item)->rsp);
+        if (retval != 0) {
+            goto error;
+        }
+    } else {
+        otpd_log_req((*item)->req, "mock access-accept");
+
+        (*item)->sent = 0;
+        retval = krad_packet_new_response(ctx.kctx, SECRET,
+                                          krad_code_name2num("Access-Accept"),
+                                          NULL, (*item)->req, &(*item)->rsp);
+        if (retval != 0) {
+            goto error;
+        }
+    }
+
+    otpd_queue_push(&ctx.stdio.responses, *item);
+    verto_set_flags(ctx.stdio.writer, VERTO_EV_FLAG_PERSIST |
+                                      VERTO_EV_FLAG_IO_ERROR |
+                                      VERTO_EV_FLAG_IO_READ |
+                                      VERTO_EV_FLAG_IO_WRITE);
+
+error:
+    krad_attrset_free(attrs);
+    otpd_log_req((*item)->req, "mocking idp end: %s",
+                 krb5_get_error_message(ctx.kctx, retval));
+
+    if (retval == 0) {
+        *item = NULL;
+    }
+
+    return retval;
 }
 
 /* Read LDAP responses from the server. */
@@ -220,10 +295,16 @@ static void on_query_readable(verto_ctx *vctx, verto_ev *ev)
         goto egress;
     }
 
-    /* Forward to RADIUS if necessary. */
-    i = otpd_forward(&item);
-    if (i != 0)
-        goto egress;
+    if (item->user.type != NULL && strcmp(item->user.type, "idp") == 0) {
+        i = otpd_mock_idp(&item);
+        if (i != 0)
+            goto egress;
+    } else {
+        /* Forward to RADIUS if necessary. */
+        i = otpd_forward(&item);
+        if (i != 0)
+            goto egress;
+    }
 
     push = &ctx.bind.requests;
     event = ctx.bind.io;
