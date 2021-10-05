@@ -608,7 +608,7 @@ static krb5_error_code ipadb_parse_ldap_entry(krb5_context kcontext,
 {
     const krb5_octet rad_string[] = "otp\0[{\"indicators\": [\"radius\"]}]";
     const krb5_octet otp_string[] = "otp\0[{\"indicators\": [\"otp\"]}]";
-    const krb5_octet idp_string[] = "idp\0[{\"indicators\": [\"idp\"]}]";
+    const krb5_octet idp_string[] = "idp\0[{\"type\":\"oauth2\",\"indicators\": [\"idp\"]}]";
     struct ipadb_context *ipactx;
     enum ipadb_user_auth ua;
     LDAP *lcontext;
