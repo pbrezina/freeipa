@@ -39,3 +39,4 @@ FreeIPA design documentation
    sysaccounts.md
    namespace.md
    pw-expiration.md
+   krb-s4u-x509-assertion.md
