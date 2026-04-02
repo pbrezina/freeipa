@@ -18,6 +18,8 @@ Add a new SMB service.
 * setattr : :ref:`Str<Str>`
 * addattr : :ref:`Str<Str>`
 * usercertificate : :ref:`Certificate<Certificate>`
+* ipakrbserviceattestationkey : :ref:`Bytes<Bytes>`
+* ipakrbserviceattestationtype : :ref:`Str<Str>`
 * ipakrbokasdelegate : :ref:`Bool<Bool>`
 * ipakrboktoauthasdelegate : :ref:`Bool<Bool>`
 * version : :ref:`Str<Str>`
