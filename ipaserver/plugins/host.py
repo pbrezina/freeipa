@@ -25,7 +25,7 @@ import logging
 
 from ipalib import api, errors, util
 from ipalib import messages
-from ipalib import Str, StrEnum, Flag
+from ipalib import Str, Flag
 from ipalib.parameters import Data, Principal, Certificate
 from ipalib.plugable import Registry
 from .baseldap import (LDAPQuery, LDAPObject, LDAPCreate,
@@ -37,9 +37,10 @@ from .baseldap import (LDAPQuery, LDAPObject, LDAPCreate,
                                      LDAPAddAttributeViaOption,
                                      LDAPRemoveAttributeViaOption)
 from .service import (
-    validate_realm, validate_auth_indicator, normalize_principal,
-    set_certificate_attrs, ticket_flags_params, update_krbticketflags,
-    set_kerberos_attrs, rename_ipaallowedtoperform_from_ldap,
+    validate_realm, validate_auth_indicator, validate_auth_indicator_value,
+    normalize_principal, set_certificate_attrs, ticket_flags_params,
+    update_krbticketflags, set_kerberos_attrs,
+    rename_ipaallowedtoperform_from_ldap,
     rename_ipaallowedtoperform_to_ldap, revoke_certs)
 from .dns import (dns_container_exists,
         add_records_for_host_validation, add_records_for_host,
@@ -646,8 +647,9 @@ class host(LDAPObject):
             label=_('Assigned ID View'),
             flags=['no_option'],
         ),
-        StrEnum(
+        Str(
             'krbprincipalauthind*',
+            validate_auth_indicator_value,
             cli_name='auth_ind',
             label=_('Authentication Indicators'),
             doc=_("Defines an allow list for Authentication Indicators."
@@ -659,10 +661,11 @@ class host(LDAPObject):
                   " Use 'idp' to allow External Identity Provider"
                   " authentications."
                   " Use 'passkey' to allow passkey-based 2FA authentications."
+                  " Use '<service>-authn:<detail>' to allow S4U2Self"
+                  " attestation indicators"
+                  " (e.g. 'ssh-authn:publickey', 'oidc-authn:mfa')."
                   " With no indicator specified,"
                   " all authentication mechanisms are allowed."),
-            values=('radius', 'otp', 'pkinit', 'hardened', 'idp',
-                    'passkey'),
         ),
     ) + ticket_flags_params
 
