@@ -237,6 +237,8 @@ ipa_kdcpolicy_check_tgs(krb5_context context, krb5_kdcpolicy_moddata moddata,
     bool is_cross_realm = false;
     bool need_bronze_bit_check = false;
     bool need_trust_check = false;
+    struct ipadb_e_data *ied;
+    struct ipadb_e_pol_limits *pol_limits = NULL;
 
     *status = NULL;
     *lifetime_out = 0;
@@ -246,7 +248,7 @@ ipa_kdcpolicy_check_tgs(krb5_context context, krb5_kdcpolicy_moddata moddata,
     is_tgs = ipadb_is_tgs_princ(context, ticket->server);
     if (!is_tgs) {
         kerr = 0;
-        goto end;
+        goto apply_limits;
     }
 
     /* Get IPA context */
@@ -267,10 +269,10 @@ ipa_kdcpolicy_check_tgs(krb5_context context, krb5_kdcpolicy_moddata moddata,
     /* Trust check needed for cross-realm tickets */
     need_trust_check = is_cross_realm;
 
-    /* If no checks needed, return success */
+    /* If no PAC checks are needed, proceed to lifetime limits. */
     if (!need_bronze_bit_check && !need_trust_check) {
         kerr = 0;
-        goto end;
+        goto apply_limits;
     }
 
     /* Parse PAC once for all checks */
@@ -292,6 +294,41 @@ ipa_kdcpolicy_check_tgs(krb5_context context, krb5_kdcpolicy_moddata moddata,
     }
 
     kerr = 0;
+
+apply_limits:
+    /* Apply per-indicator ticket lifetime limits for S4U2Self indicators.
+     * ssh-authn:* and oidc-authn:* indicators are set by ipadb_v9_issue_pac()
+     * during S4U2Self and propagate into delegated (S4U2Proxy) tickets.
+     * The server's krbAuthIndMaxTicketLife;{ssh,oidc}-authn policy limits apply. */
+    ied = (struct ipadb_e_data *)server->e_data;
+    if (ied == NULL || ied->magic != IPA_E_DATA_MAGIC)
+        goto end;
+
+    for (int i = 0; auth_indicators && auth_indicators[i] != NULL; i++) {
+        enum ipadb_user_auth_idx idx = IPADB_USER_AUTH_IDX_MAX;
+
+        if (strncmp(auth_indicators[i], "ssh-authn:", 10) == 0)
+            idx = IPADB_USER_AUTH_IDX_SSH_AUTHN;
+        else if (strncmp(auth_indicators[i], "oidc-authn:", 11) == 0)
+            idx = IPADB_USER_AUTH_IDX_OIDC_AUTHN;
+
+        if (idx == IPADB_USER_AUTH_IDX_MAX)
+            continue;
+
+        /* Apply the tightest (smallest non-zero) limit found. */
+        if (ied->pol_limits[idx].max_life != 0) {
+            if (pol_limits == NULL ||
+                ied->pol_limits[idx].max_life < pol_limits->max_life)
+                pol_limits = &ied->pol_limits[idx];
+        }
+    }
+
+    if (pol_limits != NULL) {
+        if (pol_limits->max_life != 0)
+            jitter(pol_limits->max_life, lifetime_out);
+        if (pol_limits->max_renewable_life != 0)
+            *renew_lifetime_out = pol_limits->max_renewable_life;
+    }
 
 end:
     if (pac)
