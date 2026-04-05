@@ -215,6 +215,10 @@ ipa_kdcpolicy_check_as(krb5_context context, krb5_kdcpolicy_moddata moddata,
         }
     }
 
+    krb5_klog_syslog(LOG_INFO,
+                     "AS-REQ policy: set life times "
+                     "to %ld s and %ld s",
+                     (long)(*lifetime_out), (long)(*renew_lifetime_out));
 done:
     ipadb_free_principal(context, client_actual);
 
@@ -343,6 +347,11 @@ apply_limits:
         if (pol_limits->max_renewable_life != 0)
             *renew_lifetime_out = pol_limits->max_renewable_life;
     }
+
+    krb5_klog_syslog(LOG_INFO,
+                     "TGS-REQ policy: set life times "
+                     "to %ld s and %ld s",
+                     (long)(*lifetime_out), (long)(*renew_lifetime_out));
 
 end:
     if (pac)
