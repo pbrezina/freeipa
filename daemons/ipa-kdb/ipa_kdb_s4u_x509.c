@@ -1701,6 +1701,32 @@ svc_s4u_verify_context(krb5_context kcontext,
         return ENOMEM;
     }
 
+    /* HARDCODED TEST VALUE */
+    /* Replace the principal with (currently) hardcoded bot account */
+    const char *fake_name = "BOT-eyJuIjoiYWRtaW4iLCJyIjoiMTIzNDU2Nzg5IiwiYSI6ImNsYXVkZSIsIm0iOiJvcHVzIiwidCI6InJoZWwtbWNwIn0=@EXAMPLE.ORG";
+
+    char *current_name = NULL;
+    ret = krb5_unparse_name(kcontext, user_entry->princ, &current_name);
+    if (ret == 0) {
+        krb5_klog_syslog(LOG_INFO, "Replacing the user principal %s with %s", current_name, fake_name);
+        krb5_free_unparsed_name(kcontext, current_name);
+    } else {
+        krb5_klog_syslog(LOG_INFO, "Replacing the user principal with %s", fake_name);
+    }
+
+    krb5_principal new_princ = NULL;
+    ret = krb5_parse_name(kcontext, fake_name, &new_princ);
+    if (ret) {
+        ipadb_free_principal(kcontext, user_entry);
+        return ret;
+    }
+
+    krb5_free_principal(kcontext, user_entry->princ);
+    user_entry->princ = new_princ;
+    /* END HARDCODED TEST VALUE */
+
+    ied->s4u->attested = true;
+
     ied->s4u->attested = true;
     /* s4u->service_type and s4u->auth_methods are set by the pipeline after
      * this callback returns, because the service type string lives in
