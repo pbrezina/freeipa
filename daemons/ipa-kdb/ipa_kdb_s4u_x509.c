@@ -1123,7 +1123,7 @@ s4u_lookup_user_by_cn(krb5_context kcontext,
             krb5_klog_syslog(LOG_ERR, "S4U X.509: cert has no Subject");
             return KRB5KDC_ERR_PREAUTH_FAILED;
         }
-        if (X509_NAME_get_text_by_NID(subj, NID_commonName,
+        if (X509_NAME_get_text_by_NID(subj, NID_name,
                                        cn_buf, sizeof(cn_buf)) <= 0) {
             krb5_klog_syslog(LOG_ERR,
                              "S4U X.509: no PKINIT SAN and no Subject CN");

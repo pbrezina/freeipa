@@ -132,7 +132,7 @@ def _build_cert_core(
             x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, principal),
         ]))
         .subject_name(x509.Name([
-            x509.NameAttribute(x509.oid.NameOID.COMMON_NAME, user),
+            x509.NameAttribute(x509.oid.ObjectIdentifier("2.5.4.41"), user),
         ]))
         .public_key(actual_subject_key)
         .add_extension(

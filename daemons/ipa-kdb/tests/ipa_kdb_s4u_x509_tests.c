@@ -770,7 +770,7 @@ static void test_p256_sign_verify(void **state)
     X509_gmtime_adj(X509_getm_notBefore(cert), 0);
     X509_gmtime_adj(X509_getm_notAfter(cert), 3600);
     X509_NAME_add_entry_by_NID(X509_get_subject_name(cert),
-                                NID_commonName, MBSTRING_UTF8,
+                                NID_name, MBSTRING_UTF8,
                                 (unsigned char *)"test", 4, -1, 0);
     X509_NAME_add_entry_by_NID(X509_get_issuer_name(cert),
                                 NID_commonName, MBSTRING_UTF8,
@@ -1138,7 +1138,7 @@ build_test_attestation_cert(const unsigned char *ikm, size_t ikm_len,
                                 (unsigned char *)principal,
                                 (int)strlen(principal), -1, 0);
     X509_NAME_add_entry_by_NID(X509_get_subject_name(cert),
-                                NID_commonName, MBSTRING_UTF8,
+                                NID_name, MBSTRING_UTF8,
                                 (unsigned char *)user, (int)strlen(user),
                                 -1, 0);
 
@@ -1569,7 +1569,7 @@ static void test_ssh_s4u_verify_context_mismatch(void **state)
     X509 *cert = X509_new();
     assert_non_null(cert);
     X509_NAME_add_entry_by_NID(X509_get_subject_name(cert),
-                                NID_commonName, MBSTRING_UTF8,
+                                NID_name, MBSTRING_UTF8,
                                 (unsigned char *)"alice", 5, -1, 0);
 
     /* Hint principal is "bob@EXAMPLE.COM" — different from cert CN */
