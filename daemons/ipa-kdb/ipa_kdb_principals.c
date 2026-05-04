@@ -2243,9 +2243,9 @@ done:
  * Caller must free *out with krb5_free_principal() when non-NULL.
  */
 static krb5_error_code
-ipadb_switch_bot(krb5_context kcontext,
-                 krb5_const_principal search_for,
-                 krb5_principal *out)
+ipadb_switch_bot_to_user(krb5_context kcontext,
+                         krb5_const_principal search_for,
+                         krb5_principal *out)
 {
     const char *bot_name =
         "BOT-eyJuIjoiYWRtaW4iLCJyIjoiMTIzNDU2Nzg5IiwiYSI6ImNsYXVkZSIsIm0iOiJvcHVzIiwidCI6InJoZWwtbWNwIn0=@EXAMPLE.ORG";
@@ -2295,7 +2295,7 @@ krb5_error_code ipadb_get_principal(krb5_context kcontext,
 
     /* HARDCODED TEST VALUE: if search_for is the BOT account, look up
      * admin@EXAMPLE.ORG instead. */
-    kerr = ipadb_switch_bot(kcontext, search_for, &replaced_princ);
+    kerr = ipadb_switch_bot_to_user(kcontext, search_for, &replaced_princ);
     if (kerr)
         return kerr;
     if (replaced_princ)
