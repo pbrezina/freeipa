@@ -292,9 +292,24 @@ parse_krb5_principal_name(const unsigned char *der, size_t derlen,
                             fwrite(comp, 1, comp_len, ms);
                             first = false;
                         }
-                        fprintf(ms, "@%s", realm);
                         fclose(ms);
-                        *princ_str_out = buf;
+                        /* If the name already ends with @realm, the
+                         * component included the realm — use as-is
+                         * to avoid a double @REALM suffix. */
+                        size_t rlen = strlen(realm);
+                        if (buflen > rlen + 1 &&
+                            buf[buflen - rlen - 1] == '@' &&
+                            strncmp(buf + buflen - rlen,
+                                    realm, rlen) == 0) {
+                            *princ_str_out = buf;
+                        } else {
+                            if (asprintf(princ_str_out,
+                                         "%s@%s", buf, realm) < 0) {
+                                free(buf);
+                                goto out;
+                            }
+                            free(buf);
+                        }
                         ret = 0;
                     }
                 }
@@ -1131,9 +1146,20 @@ s4u_lookup_user_by_cn(krb5_context kcontext,
         }
 
         const krb5_data *realm = krb5_princ_realm(kcontext, hint_princ);
-        ret = krb5_build_principal(kcontext, &user_princ,
-                                    (unsigned int)realm->length, realm->data,
-                                    cn_buf, (char *)NULL);
+        size_t cn_len = strlen(cn_buf);
+        /* If cn_buf already ends with @REALM, parse as full principal
+         * instead of appending the realm again. */
+        if (cn_len > realm->length + 1 &&
+            cn_buf[cn_len - realm->length - 1] == '@' &&
+            strncmp(cn_buf + cn_len - realm->length,
+                    realm->data, realm->length) == 0) {
+            ret = krb5_parse_name(kcontext, cn_buf, &user_princ);
+        } else {
+            ret = krb5_build_principal(kcontext, &user_princ,
+                                        (unsigned int)realm->length,
+                                        realm->data,
+                                        cn_buf, (char *)NULL);
+        }
         if (ret) {
             krb5_klog_syslog(LOG_ERR,
                              "S4U X.509: cannot build principal from CN '%s'",
