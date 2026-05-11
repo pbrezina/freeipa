@@ -44,6 +44,7 @@
 #include <openssl/asn1t.h>
 #include <openssl/ec.h>
 #include <openssl/param_build.h>
+#include <openssl/rand.h>
 
 #include "ipa_kdb.h"
 
@@ -54,6 +55,7 @@
 #define OID_KERBEROS_SERVICE_ISSUER_BINDING "2.16.840.1.113730.3.8.15.3.1"
 #define OID_SSH_AUTHN_CONTEXT               "2.16.840.1.113730.3.8.15.3.2"
 #define OID_OIDC_AUTHN_CONTEXT              "2.16.840.1.113730.3.8.15.3.3"
+#define OID_MCP_AUTHN_CONTEXT               "2.16.840.1.113730.3.8.15.3.4"
 
 
 /* ------------------------------------------------------------------ *
@@ -167,6 +169,28 @@ ASN1_SEQUENCE(OIDC_AUTHN_CONTEXT) = {
 } ASN1_SEQUENCE_END(OIDC_AUTHN_CONTEXT)
 
 IMPLEMENT_ASN1_FUNCTIONS(OIDC_AUTHN_CONTEXT)
+
+typedef struct mcp_authn_context_st {
+    ASN1_INTEGER    *version;
+    ASN1_UTF8STRING *original_user;    /* original username, e.g. "admin" */
+    ASN1_UTF8STRING *request_id;       /* session/request identifier */
+    ASN1_UTF8STRING *agent_name;       /* [0] EXPLICIT OPTIONAL, e.g. "claude" */
+    ASN1_UTF8STRING *agent_model;      /* [1] EXPLICIT OPTIONAL, e.g. "opus" */
+    ASN1_UTF8STRING *tool_id;          /* [2] EXPLICIT OPTIONAL, e.g. "rhel-mcp" */
+} MCP_AUTHN_CONTEXT;
+
+DECLARE_ASN1_FUNCTIONS(MCP_AUTHN_CONTEXT)
+
+ASN1_SEQUENCE(MCP_AUTHN_CONTEXT) = {
+    ASN1_SIMPLE(MCP_AUTHN_CONTEXT, version,        ASN1_INTEGER),
+    ASN1_SIMPLE(MCP_AUTHN_CONTEXT, original_user,  ASN1_UTF8STRING),
+    ASN1_SIMPLE(MCP_AUTHN_CONTEXT, request_id,     ASN1_UTF8STRING),
+    ASN1_EXP_OPT(MCP_AUTHN_CONTEXT, agent_name,   ASN1_UTF8STRING, 0),
+    ASN1_EXP_OPT(MCP_AUTHN_CONTEXT, agent_model,  ASN1_UTF8STRING, 1),
+    ASN1_EXP_OPT(MCP_AUTHN_CONTEXT, tool_id,      ASN1_UTF8STRING, 2),
+} ASN1_SEQUENCE_END(MCP_AUTHN_CONTEXT)
+
+IMPLEMENT_ASN1_FUNCTIONS(MCP_AUTHN_CONTEXT)
 
 /* ------------------------------------------------------------------ *
  * id-pkinit-san (1.3.6.1.5.2.2) PKINIT Subject Alternative Name     *
@@ -1016,6 +1040,13 @@ static krb5_error_code svc_s4u_verify_context(krb5_context,
                                                unsigned int,
                                                const void *,
                                                krb5_db_entry **);
+static krb5_error_code mcp_s4u_verify_context(krb5_context,
+                                               const struct ipa_s4u_cert_handler *,
+                                               X509 *,
+                                               krb5_const_principal,
+                                               unsigned int,
+                                               const void *,
+                                               krb5_db_entry **);
 static EVP_PKEY *parse_openssh_pubkey(const unsigned char *data, size_t len);
 static EVP_PKEY *parse_der_spki_pubkey(const unsigned char *data, size_t len);
 
@@ -1037,6 +1068,17 @@ parse_oidc_context(const unsigned char *data, size_t len)
     OIDC_AUTHN_CONTEXT *ctx = d2i_OIDC_AUTHN_CONTEXT(NULL, &data, (long)len);
     if (!ctx || ASN1_INTEGER_get(ctx->version) != 0) {
         OIDC_AUTHN_CONTEXT_free(ctx);
+        return NULL;
+    }
+    return ctx;
+}
+
+static void *
+parse_mcp_context(const unsigned char *data, size_t len)
+{
+    MCP_AUTHN_CONTEXT *ctx = d2i_MCP_AUTHN_CONTEXT(NULL, &data, (long)len);
+    if (!ctx || ASN1_INTEGER_get(ctx->version) != 0) {
+        MCP_AUTHN_CONTEXT_free(ctx);
         return NULL;
     }
     return ctx;
@@ -1066,6 +1108,18 @@ static const struct ipa_s4u_cert_handler s4u_handlers[] = {
         .parse_context    = parse_oidc_context,
         .free_context     = (s4u_free_context_fn)OIDC_AUTHN_CONTEXT_free,
         .verify_context   = oidc_s4u_verify_context,
+    },
+    {
+        .service_type     = "mcp",
+        .key_store        = S4U_KEY_STORE_ATTESTATION,
+        .hkdf_salt        = "mcp-attestation-v1",
+        .binding_label    = "mcp-attestation-binding-v1",
+        .context_ext_oid  = OID_MCP_AUTHN_CONTEXT,
+        .ldap_pubkey_attr = "ipaKrbServiceAttestationKey",
+        .parse_pubkey     = parse_der_spki_pubkey,
+        .parse_context    = parse_mcp_context,
+        .free_context     = (s4u_free_context_fn)MCP_AUTHN_CONTEXT_free,
+        .verify_context   = mcp_s4u_verify_context,
     },
 };
 
@@ -1680,6 +1734,127 @@ oidc_s4u_verify_context(krb5_context kcontext,
                              "S4U X.509: OOM setting auth_methods; "
                              "audit record will show 'unknown'");
     }
+
+    ied->s4u->attested = true;
+
+    *entry_out = user_entry;
+    return 0;
+}
+
+/* ------------------------------------------------------------------ *
+ * MCP service context verification callback.                          *
+ *                                                                     *
+ * The MCP server requests S4U for the original user (e.g. admin).     *
+ * This handler looks up the user, then switches the entry principal   *
+ * to a BOT-<uidNumber>-<random> identity so the KDC issues an S4U    *
+ * ticket for the ephemeral BOT principal.                             *
+ * ------------------------------------------------------------------ */
+static krb5_error_code
+mcp_s4u_verify_context(krb5_context kcontext,
+                        const struct ipa_s4u_cert_handler *h,
+                        X509 *cert,
+                        krb5_const_principal hint_princ,
+                        unsigned int flags,
+                        const void *svc_context,
+                        krb5_db_entry **entry_out)
+{
+    const MCP_AUTHN_CONTEXT *authn = (const MCP_AUTHN_CONTEXT *)svc_context;
+    krb5_db_entry *user_entry = NULL;
+    struct ipadb_e_data *ied = NULL;
+    krb5_error_code ret;
+
+    ret = s4u_lookup_user_by_cn(kcontext, cert, hint_princ, flags,
+                                 &user_entry, &ied);
+    if (ret)
+        return ret;
+
+    /* Cross-realm referral: no IPA e_data, no BOT switch needed. */
+    if (!ied) {
+        *entry_out = user_entry;
+        return 0;
+    }
+
+    if (!ied->s4u) {
+        ipadb_free_principal(kcontext, user_entry);
+        return ENOMEM;
+    }
+
+    /* Read uidNumber from LDAP to build the BOT principal name. */
+    {
+        struct ipadb_context *ipactx = ipadb_get_context(kcontext);
+        LDAPMessage *ldap_res = NULL;
+        int uid_number = -1;
+        char *attrs[] = { "uidNumber", NULL };
+
+        if (!ipactx || !ied->entry_dn) {
+            krb5_klog_syslog(LOG_ERR,
+                             "S4U X.509 MCP: no LDAP context or entry DN");
+            ipadb_free_principal(kcontext, user_entry);
+            return KRB5_KDB_INTERNAL_ERROR;
+        }
+
+        ret = ipadb_simple_search(ipactx, ied->entry_dn, LDAP_SCOPE_BASE,
+                                   "(objectClass=*)", attrs, &ldap_res);
+        if (ret == 0 && ldap_res) {
+            LDAPMessage *le = ldap_first_entry(ipactx->lcontext, ldap_res);
+            if (le)
+                ipadb_ldap_attr_to_int(ipactx->lcontext, le,
+                                       "uidNumber", &uid_number);
+            ldap_msgfree(ldap_res);
+        }
+
+        if (uid_number < 0) {
+            krb5_klog_syslog(LOG_ERR,
+                             "S4U X.509 MCP: cannot read uidNumber for '%s'",
+                             ied->entry_dn);
+            ipadb_free_principal(kcontext, user_entry);
+            return KRB5_KDB_INTERNAL_ERROR;
+        }
+
+        /* Generate random suffix (8 hex chars = 4 bytes). */
+        unsigned char rand_bytes[4];
+        char rand_hex[9];
+        if (RAND_bytes(rand_bytes, sizeof(rand_bytes)) != 1) {
+            krb5_klog_syslog(LOG_ERR, "S4U X.509 MCP: RAND_bytes failed");
+            ipadb_free_principal(kcontext, user_entry);
+            return KRB5_KDB_INTERNAL_ERROR;
+        }
+        snprintf(rand_hex, sizeof(rand_hex), "%02x%02x%02x%02x",
+                 rand_bytes[0], rand_bytes[1], rand_bytes[2], rand_bytes[3]);
+
+        /* Build BOT-<uidNumber>-<random>@REALM (must fit 32 char username). */
+        const krb5_data *realm = krb5_princ_realm(kcontext, hint_princ);
+        char bot_name[64];
+        snprintf(bot_name, sizeof(bot_name), "BOT-%d-%s", uid_number, rand_hex);
+
+        if (strlen(bot_name) > 32) {
+            krb5_klog_syslog(LOG_ERR,
+                             "S4U X.509 MCP: BOT name '%s' exceeds 32 chars",
+                             bot_name);
+            ipadb_free_principal(kcontext, user_entry);
+            return KRB5_KDB_INTERNAL_ERROR;
+        }
+
+        krb5_principal bot_princ = NULL;
+        ret = krb5_build_principal(kcontext, &bot_princ,
+                                    (unsigned int)realm->length, realm->data,
+                                    bot_name, (char *)NULL);
+        if (ret) {
+            ipadb_free_principal(kcontext, user_entry);
+            return ret;
+        }
+
+        krb5_klog_syslog(LOG_INFO,
+                         "S4U X.509 MCP: switching user principal to %s",
+                         bot_name);
+        krb5_free_principal(kcontext, user_entry->princ);
+        user_entry->princ = bot_princ;
+    }
+
+    ied->s4u->service_type = strdup(h->service_type);
+    if (!ied->s4u->service_type)
+        krb5_klog_syslog(LOG_WARNING,
+                         "S4U X.509 MCP: OOM copying service type");
 
     ied->s4u->attested = true;
 
