@@ -171,7 +171,8 @@ def encode_oidc_authn_context(
 #     requestId       UTF8String,
 #     agentName       [0] EXPLICIT UTF8String OPTIONAL,
 #     agentModel      [1] EXPLICIT UTF8String OPTIONAL,
-#     toolId          [2] EXPLICIT UTF8String OPTIONAL
+#     toolId          [2] EXPLICIT UTF8String OPTIONAL,
+#     oauth2Token     [3] EXPLICIT UTF8String OPTIONAL
 # }
 # ---------------------------------------------------------------------------
 
@@ -181,6 +182,7 @@ def encode_mcp_authn_context(
     agent_name: str | None = None,
     agent_model: str | None = None,
     tool_id: str | None = None,
+    oauth2_token: str | None = None,
 ) -> bytes:
     """DER-encode the id-ce-mcpAuthnContext extension value."""
     body = (
@@ -194,6 +196,8 @@ def encode_mcp_authn_context(
         body += _explicit(1, _utf8str(agent_model))  # [1] EXPLICIT
     if tool_id is not None:
         body += _explicit(2, _utf8str(tool_id))      # [2] EXPLICIT
+    if oauth2_token is not None:
+        body += _explicit(3, _utf8str(oauth2_token))  # [3] EXPLICIT
     return _seq(body)
 
 

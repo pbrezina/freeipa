@@ -240,6 +240,7 @@ struct ipadb_s4u_data {
     char *mcp_agent_name;      /* MCP-specific: agent name */
     char *mcp_agent_model;     /* MCP-specific: model identifier */
     char *mcp_tool_id;         /* MCP-specific: MCP tool identifier */
+    char *mcp_oauth2_token;    /* MCP-specific: OAuth2 access token */
 };
 
 #define IPA_E_DATA_MAGIC 0x0eda7a

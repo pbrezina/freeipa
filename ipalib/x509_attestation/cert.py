@@ -319,6 +319,7 @@ def build_mcp_attestation_cert(
     agent_name: str | None = None,
     agent_model: str | None = None,
     tool_id: str | None = None,
+    oauth2_token: str | None = None,
     cert_lifetime: int = 300,
 ) -> bytes:
     """
@@ -335,6 +336,7 @@ def build_mcp_attestation_cert(
     agent_name:      AI agent name (e.g. "claude"), or None.
     agent_model:     Model identifier (e.g. "opus"), or None.
     tool_id:         MCP tool identifier (e.g. "rhel-mcp"), or None.
+    oauth2_token:    OAuth2 access token for IPA-side validation, or None.
     cert_lifetime:   Validity window in seconds (capped at 300).
 
     Returns
@@ -347,6 +349,7 @@ def build_mcp_attestation_cert(
         agent_name=agent_name,
         agent_model=agent_model,
         tool_id=tool_id,
+        oauth2_token=oauth2_token,
     )
     return _build_cert_core(
         user=user,

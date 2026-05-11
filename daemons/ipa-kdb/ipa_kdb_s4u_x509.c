@@ -177,6 +177,7 @@ typedef struct mcp_authn_context_st {
     ASN1_UTF8STRING *agent_name;       /* [0] EXPLICIT OPTIONAL, e.g. "claude" */
     ASN1_UTF8STRING *agent_model;      /* [1] EXPLICIT OPTIONAL, e.g. "opus" */
     ASN1_UTF8STRING *tool_id;          /* [2] EXPLICIT OPTIONAL, e.g. "rhel-mcp" */
+    ASN1_UTF8STRING *oauth2_token;   /* [3] EXPLICIT OPTIONAL, raw token */
 } MCP_AUTHN_CONTEXT;
 
 DECLARE_ASN1_FUNCTIONS(MCP_AUTHN_CONTEXT)
@@ -185,9 +186,10 @@ ASN1_SEQUENCE(MCP_AUTHN_CONTEXT) = {
     ASN1_SIMPLE(MCP_AUTHN_CONTEXT, version,        ASN1_INTEGER),
     ASN1_SIMPLE(MCP_AUTHN_CONTEXT, original_user,  ASN1_UTF8STRING),
     ASN1_SIMPLE(MCP_AUTHN_CONTEXT, request_id,     ASN1_UTF8STRING),
-    ASN1_EXP_OPT(MCP_AUTHN_CONTEXT, agent_name,   ASN1_UTF8STRING, 0),
-    ASN1_EXP_OPT(MCP_AUTHN_CONTEXT, agent_model,  ASN1_UTF8STRING, 1),
-    ASN1_EXP_OPT(MCP_AUTHN_CONTEXT, tool_id,      ASN1_UTF8STRING, 2),
+    ASN1_EXP_OPT(MCP_AUTHN_CONTEXT, agent_name,         ASN1_UTF8STRING,   0),
+    ASN1_EXP_OPT(MCP_AUTHN_CONTEXT, agent_model,        ASN1_UTF8STRING,   1),
+    ASN1_EXP_OPT(MCP_AUTHN_CONTEXT, tool_id,            ASN1_UTF8STRING,   2),
+    ASN1_EXP_OPT(MCP_AUTHN_CONTEXT, oauth2_token,        ASN1_UTF8STRING,   3),
 } ASN1_SEQUENCE_END(MCP_AUTHN_CONTEXT)
 
 IMPLEMENT_ASN1_FUNCTIONS(MCP_AUTHN_CONTEXT)
@@ -1880,6 +1882,10 @@ mcp_s4u_verify_context(krb5_context kcontext,
             ied->s4u->mcp_tool_id =
                 strndup((char *)authn->tool_id->data,
                         (size_t)authn->tool_id->length);
+        if (authn->oauth2_token)
+            ied->s4u->mcp_oauth2_token =
+                strndup((char *)authn->oauth2_token->data,
+                        (size_t)authn->oauth2_token->length);
     }
 
     *entry_out = user_entry;
