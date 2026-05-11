@@ -1497,40 +1497,6 @@ ssh_s4u_verify_context(krb5_context kcontext,
     if (ret)
         return ret;
 
-    /* HARDCODED TEST VALUE: if hint_princ is a BOT account, switch
-     * the entry's principal to the original user so the S4U ticket is
-     * issued on behalf of the real account, not the BOT identity. */
-    {
-        const char *bot_name =
-            "BOT-eyJuIjoiYWRtaW4iLCJyIjoiMTIzNDU2Nzg5IiwiYSI6ImNsYXVkZSIsIm0iOiJvcHVzIiwidCI6InJoZWwtbWNwIn0=@EXAMPLE.ORG";
-        const char *admin_name = "admin@EXAMPLE.ORG";
-        krb5_principal bot_princ = NULL;
-
-        ret = krb5_parse_name(kcontext, bot_name, &bot_princ);
-        if (ret) {
-            ipadb_free_principal(kcontext, user_entry);
-            return ret;
-        }
-
-        if (krb5_principal_compare(kcontext, hint_princ, bot_princ)) {
-            krb5_principal admin_princ = NULL;
-            ret = krb5_parse_name(kcontext, admin_name, &admin_princ);
-            if (ret) {
-                krb5_free_principal(kcontext, bot_princ);
-                ipadb_free_principal(kcontext, user_entry);
-                return ret;
-            }
-            krb5_klog_syslog(LOG_INFO,
-                             "S4U X.509: hint_princ is BOT account, "
-                             "switching entry principal to %s",
-                             admin_name);
-            krb5_free_principal(kcontext, user_entry->princ);
-            user_entry->princ = admin_princ;
-        }
-        krb5_free_principal(kcontext, bot_princ);
-    }
-    /* END HARDCODED TEST VALUE */
-
     /* Cross-realm referral: no IPA e_data, no indicators to set. */
     if (!ied) {
         *entry_out = user_entry;
@@ -1760,32 +1726,6 @@ svc_s4u_verify_context(krb5_context kcontext,
         ipadb_free_principal(kcontext, user_entry);
         return ENOMEM;
     }
-
-    /* HARDCODED TEST VALUE */
-    /* Replace the principal with (currently) hardcoded bot account */
-    const char *fake_name = "BOT-eyJuIjoiYWRtaW4iLCJyIjoiMTIzNDU2Nzg5IiwiYSI6ImNsYXVkZSIsIm0iOiJvcHVzIiwidCI6InJoZWwtbWNwIn0=@EXAMPLE.ORG";
-
-    char *current_name = NULL;
-    ret = krb5_unparse_name(kcontext, user_entry->princ, &current_name);
-    if (ret == 0) {
-        krb5_klog_syslog(LOG_INFO, "Replacing the user principal %s with %s", current_name, fake_name);
-        krb5_free_unparsed_name(kcontext, current_name);
-    } else {
-        krb5_klog_syslog(LOG_INFO, "Replacing the user principal with %s", fake_name);
-    }
-
-    krb5_principal new_princ = NULL;
-    ret = krb5_parse_name(kcontext, fake_name, &new_princ);
-    if (ret) {
-        ipadb_free_principal(kcontext, user_entry);
-        return ret;
-    }
-
-    krb5_free_principal(kcontext, user_entry->princ);
-    user_entry->princ = new_princ;
-    /* END HARDCODED TEST VALUE */
-
-    ied->s4u->attested = true;
 
     ied->s4u->attested = true;
     /* s4u->service_type and s4u->auth_methods are set by the pipeline after

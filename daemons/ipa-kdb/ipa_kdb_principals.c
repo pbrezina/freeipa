@@ -2236,81 +2236,6 @@ done:
  * Currently we only support objcts with both objectclasses present at the
  * same time. */
 
-/* HARDCODED TEST VALUE
- * If search_for matches the BOT account, set *out to a newly allocated
- * principal for admin@EXAMPLE.ORG.  Otherwise *out is set to NULL.
- * Returns 0 on success or a krb5 error code on failure.
- * Caller must free *out with krb5_free_principal() when non-NULL.
- */
-static krb5_error_code
-ipadb_switch_bot_to_user(krb5_context kcontext,
-                         krb5_const_principal search_for,
-                         krb5_principal *out)
-{
-    const char *bot_name =
-        "BOT-eyJuIjoiYWRtaW4iLCJyIjoiMTIzNDU2Nzg5IiwiYSI6ImNsYXVkZSIsIm0iOiJvcHVzIiwidCI6InJoZWwtbWNwIn0=@EXAMPLE.ORG";
-    const char *admin_name = "admin@EXAMPLE.ORG";
-    krb5_principal bot_princ = NULL;
-    krb5_error_code ret;
-
-    *out = NULL;
-
-    if (search_for == NULL)
-        return 0;
-
-    ret = krb5_parse_name(kcontext, bot_name, &bot_princ);
-    if (ret)
-        return ret;
-
-    if (krb5_principal_compare(kcontext, search_for, bot_princ)) {
-        krb5_klog_syslog(LOG_INFO,
-                         "search_for matches BOT account, "
-                         "switching to %s", admin_name);
-
-        ret = krb5_parse_name(kcontext, admin_name, out);
-    }
-
-    krb5_free_principal(kcontext, bot_princ);
-    return ret;
-}
-/* HARDCODED TEST VALUE
- * If the original search_for was a BOT account (replaced_princ != NULL),
- * replace the looked-up entry's principal with the original BOT principal.
- * This makes the KDC issue tickets for the BOT identity while the KDB
- * data comes from the real user (admin).
- */
-static krb5_error_code
-ipadb_switch_user_to_bot(krb5_context kcontext,
-                         krb5_const_principal original_princ,
-                         krb5_db_entry *entry)
-{
-    krb5_principal new_princ = NULL;
-    krb5_error_code ret;
-
-    char *real_name = NULL;
-    char *bot_name = NULL;
-
-    krb5_unparse_name(kcontext, entry->princ, &real_name);
-    krb5_unparse_name(kcontext, original_princ, &bot_name);
-    krb5_klog_syslog(LOG_INFO,
-                     "switching from real principal '%s' back to "
-                     "bot account '%s'",
-                     real_name ? real_name : "(unknown)",
-                     bot_name ? bot_name : "(unknown)");
-    krb5_free_unparsed_name(kcontext, real_name);
-    krb5_free_unparsed_name(kcontext, bot_name);
-
-    ret = krb5_copy_principal(kcontext, original_princ, &new_princ);
-    if (ret)
-        return ret;
-
-    krb5_free_principal(kcontext, entry->princ);
-    entry->princ = new_princ;
-
-    return 0;
-}
-/* END HARDCODED TEST VALUE */
-
 krb5_error_code ipadb_get_principal(krb5_context kcontext,
                                     krb5_const_principal search_for,
                                     unsigned int flags,
@@ -2319,8 +2244,6 @@ krb5_error_code ipadb_get_principal(krb5_context kcontext,
     struct ipadb_context *ipactx;
     bool is_local_tgs_princ;
     const char *opt_pac_tkt_chksum_val;
-    krb5_const_principal original_princ = search_for;
-    krb5_principal replaced_princ = NULL;
     krb5_error_code kerr;
 
     *entry = NULL;
@@ -2330,16 +2253,7 @@ krb5_error_code ipadb_get_principal(krb5_context kcontext,
         return KRB5_KDB_DBNOTINITED;
     }
 
-    /* HARDCODED TEST VALUE: if search_for is the BOT account, look up
-     * admin@EXAMPLE.ORG instead. */
-    kerr = ipadb_switch_bot_to_user(kcontext, search_for, &replaced_princ);
-    if (kerr)
-        return kerr;
-    if (replaced_princ)
-        search_for = replaced_princ;
-
     if (!is_request_for_us(kcontext, ipactx->local_tgs, search_for)) {
-        krb5_free_principal(kcontext, replaced_princ);
         return KRB5_KDB_NOENTRY;
     }
 
@@ -2348,17 +2262,8 @@ krb5_error_code ipadb_get_principal(krb5_context kcontext,
     if (kerr == KRB5_KDB_NOENTRY) {
         kerr = dbget_alias(kcontext, ipactx, search_for, flags, entry);
     }
-    krb5_free_principal(kcontext, replaced_princ);
     if (kerr)
         return kerr;
-
-    /* HARDCODED TEST VALUE: if the input was a BOT account, rename
-     * the found entry's principal back to the BOT identity. */
-    if (original_princ != search_for) {
-        kerr = ipadb_switch_user_to_bot(kcontext, original_princ, *entry);
-        if (kerr)
-            return kerr;
-    }
 
     /* If TGS principal, some virtual attributes may be added */
     if (ipadb_is_tgs_princ(kcontext, (*entry)->princ)) {
