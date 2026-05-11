@@ -2236,6 +2236,131 @@ done:
  * Currently we only support objcts with both objectclasses present at the
  * same time. */
 
+/*
+ * If search_for is a BOT ephemeral principal (BOT-<uidNumber>-<random>),
+ * resolve the real user by looking up uidNumber in LDAP and reading
+ * their krbPrincipalName.  Sets *out to the resolved principal on match,
+ * or NULL if search_for is not a BOT principal.
+ * Caller must free *out with krb5_free_principal().
+ */
+static krb5_error_code
+ipadb_switch_bot_to_user(krb5_context kcontext,
+                         krb5_const_principal search_for,
+                         krb5_principal *out)
+{
+    struct ipadb_context *ipactx;
+    const krb5_data *first;
+    const char *name;
+    const char *last_dash;
+    char uid_buf[32];
+    size_t uid_len;
+    char filter[128];
+    char *attrs[] = { "krbPrincipalName", NULL };
+    LDAPMessage *res = NULL;
+    LDAPMessage *le = NULL;
+    char *princ_name = NULL;
+    krb5_error_code ret;
+
+    *out = NULL;
+
+    if (search_for == NULL || krb5_princ_size(kcontext, search_for) != 1)
+        return 0;
+
+    first = krb5_princ_component(kcontext, search_for, 0);
+    if (!first || first->length < 6 ||
+        strncmp(first->data, "BOT-", 4) != 0)
+        return 0;
+
+    name = first->data;
+    /* Find last '-' to separate uidNumber from random suffix.
+     * "BOT-12345-abc" -> uid portion is "12345". */
+    last_dash = NULL;
+    for (size_t i = 4; i < (size_t)first->length; i++) {
+        if (name[i] == '-')
+            last_dash = &name[i];
+    }
+    if (!last_dash || last_dash == &name[4])
+        return 0; /* malformed: no random suffix */
+
+    uid_len = (size_t)(last_dash - &name[4]);
+    if (uid_len == 0 || uid_len >= sizeof(uid_buf))
+        return 0;
+
+    memcpy(uid_buf, &name[4], uid_len);
+    uid_buf[uid_len] = '\0';
+
+    /* Verify uid is all digits (uidNumber). */
+    for (size_t i = 0; i < uid_len; i++) {
+        if (uid_buf[i] < '0' || uid_buf[i] > '9')
+            return 0;
+    }
+
+    ipactx = ipadb_get_context(kcontext);
+    if (!ipactx || !ipactx->lcontext)
+        return KRB5_KDB_DBNOTINITED;
+
+    snprintf(filter, sizeof(filter), "(uidNumber=%s)", uid_buf);
+
+    ret = ipadb_simple_search(ipactx, ipactx->accounts_base,
+                               LDAP_SCOPE_SUBTREE, filter, attrs, &res);
+    if (ret) {
+        krb5_klog_syslog(LOG_ERR,
+                         "BOT principal: LDAP search for uidNumber=%s failed",
+                         uid_buf);
+        return ret;
+    }
+
+    le = ldap_first_entry(ipactx->lcontext, res);
+    if (!le) {
+        krb5_klog_syslog(LOG_ERR,
+                         "BOT principal: no user with uidNumber=%s", uid_buf);
+        ldap_msgfree(res);
+        return KRB5_KDB_NOENTRY;
+    }
+
+    ret = ipadb_ldap_attr_to_str(ipactx->lcontext, le,
+                                  "krbPrincipalName", &princ_name);
+    ldap_msgfree(res);
+    if (ret || !princ_name) {
+        krb5_klog_syslog(LOG_ERR,
+                         "BOT principal: no krbPrincipalName for uidNumber=%s",
+                         uid_buf);
+        free(princ_name);
+        return KRB5_KDB_NOENTRY;
+    }
+
+    krb5_klog_syslog(LOG_INFO,
+                     "BOT principal: resolved uidNumber=%s to %s",
+                     uid_buf, princ_name);
+
+    ret = krb5_parse_name(kcontext, princ_name, out);
+    free(princ_name);
+    return ret;
+}
+
+/*
+ * Replace the looked-up entry's principal with the original BOT principal.
+ * This makes the KDC issue tickets for the BOT identity while the KDB
+ * data (keys, policy, etc.) comes from the real user.
+ */
+static krb5_error_code
+ipadb_switch_user_to_bot(krb5_context kcontext,
+                         krb5_const_principal original_princ,
+                         krb5_db_entry *entry)
+{
+    krb5_principal new_princ = NULL;
+    krb5_error_code ret;
+
+    ret = krb5_copy_principal(kcontext, original_princ, &new_princ);
+    if (ret)
+        return ret;
+
+    krb5_free_principal(kcontext, entry->princ);
+    entry->princ = new_princ;
+
+    return 0;
+}
+
 krb5_error_code ipadb_get_principal(krb5_context kcontext,
                                     krb5_const_principal search_for,
                                     unsigned int flags,
@@ -2244,6 +2369,8 @@ krb5_error_code ipadb_get_principal(krb5_context kcontext,
     struct ipadb_context *ipactx;
     bool is_local_tgs_princ;
     const char *opt_pac_tkt_chksum_val;
+    krb5_const_principal original_princ = search_for;
+    krb5_principal replaced_princ = NULL;
     krb5_error_code kerr;
 
     *entry = NULL;
@@ -2253,7 +2380,15 @@ krb5_error_code ipadb_get_principal(krb5_context kcontext,
         return KRB5_KDB_DBNOTINITED;
     }
 
+    /* If search_for is a BOT principal, resolve to the real user. */
+    kerr = ipadb_switch_bot_to_user(kcontext, search_for, &replaced_princ);
+    if (kerr)
+        return kerr;
+    if (replaced_princ)
+        search_for = replaced_princ;
+
     if (!is_request_for_us(kcontext, ipactx->local_tgs, search_for)) {
+        krb5_free_principal(kcontext, replaced_princ);
         return KRB5_KDB_NOENTRY;
     }
 
@@ -2262,8 +2397,17 @@ krb5_error_code ipadb_get_principal(krb5_context kcontext,
     if (kerr == KRB5_KDB_NOENTRY) {
         kerr = dbget_alias(kcontext, ipactx, search_for, flags, entry);
     }
+    krb5_free_principal(kcontext, replaced_princ);
     if (kerr)
         return kerr;
+
+    /* If the input was a BOT principal, rename the found entry's
+     * principal back to the BOT identity. */
+    if (original_princ != search_for) {
+        kerr = ipadb_switch_user_to_bot(kcontext, original_princ, *entry);
+        if (kerr)
+            return kerr;
+    }
 
     /* If TGS principal, some virtual attributes may be added */
     if (ipadb_is_tgs_princ(kcontext, (*entry)->princ)) {
