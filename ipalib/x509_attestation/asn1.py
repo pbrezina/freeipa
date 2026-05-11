@@ -16,6 +16,7 @@ gss-s4u-x509-asn1.c (OpenSSH client) and ipa_kdb_s4u_x509.c (IPA KDB plugin).
 OID_KERBEROS_SERVICE_ISSUER_BINDING = "2.16.840.1.113730.3.8.15.3.1"
 OID_SSH_AUTHN_CONTEXT = "2.16.840.1.113730.3.8.15.3.2"
 OID_OIDC_AUTHN_CONTEXT = "2.16.840.1.113730.3.8.15.3.3"
+OID_MCP_AUTHN_CONTEXT = "2.16.840.1.113730.3.8.15.3.4"
 OID_PKINIT_SAN = "1.3.6.1.5.2.2"
 OID_PKINIT_KP_CLIENTAUTH = "1.3.6.1.5.2.3.4"
 
@@ -158,6 +159,41 @@ def encode_oidc_authn_context(
         body += _seq(b"".join(_utf8str(v) for v in amr))  # amrValues OPTIONAL
     if client_address is not None:
         body += _explicit(0, _utf8str(client_address))  # [0] EXPLICIT OPTIONAL
+    return _seq(body)
+
+
+# ---------------------------------------------------------------------------
+# McpAuthnContext
+#
+# id-ce-mcpAuthnContext (OID 2.16.840.1.113730.3.8.15.3.4) ::= SEQUENCE {
+#     version         INTEGER (0),
+#     originalUser    UTF8String,
+#     requestId       UTF8String,
+#     agentName       [0] EXPLICIT UTF8String OPTIONAL,
+#     agentModel      [1] EXPLICIT UTF8String OPTIONAL,
+#     toolId          [2] EXPLICIT UTF8String OPTIONAL
+# }
+# ---------------------------------------------------------------------------
+
+def encode_mcp_authn_context(
+    original_user: str,
+    request_id: str,
+    agent_name: str | None = None,
+    agent_model: str | None = None,
+    tool_id: str | None = None,
+) -> bytes:
+    """DER-encode the id-ce-mcpAuthnContext extension value."""
+    body = (
+        _int_der(0)                   # version = 0
+        + _utf8str(original_user)     # originalUser
+        + _utf8str(request_id)        # requestId
+    )
+    if agent_name is not None:
+        body += _explicit(0, _utf8str(agent_name))   # [0] EXPLICIT
+    if agent_model is not None:
+        body += _explicit(1, _utf8str(agent_model))  # [1] EXPLICIT
+    if tool_id is not None:
+        body += _explicit(2, _utf8str(tool_id))      # [2] EXPLICIT
     return _seq(body)
 
 

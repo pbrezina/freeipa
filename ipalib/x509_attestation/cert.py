@@ -20,10 +20,11 @@ from cryptography.hazmat.primitives.asymmetric import ed25519
 
 from .asn1 import (
     OID_KERBEROS_SERVICE_ISSUER_BINDING,
-    OID_SSH_AUTHN_CONTEXT, OID_OIDC_AUTHN_CONTEXT,
+    OID_SSH_AUTHN_CONTEXT, OID_OIDC_AUTHN_CONTEXT, OID_MCP_AUTHN_CONTEXT,
     OID_PKINIT_SAN, OID_PKINIT_KP_CLIENTAUTH,
     encode_issuer_binding,
     encode_authn_context, encode_oidc_authn_context,
+    encode_mcp_authn_context,
     encode_pkinit_san_value,
 )
 from .crypto import (
@@ -303,6 +304,57 @@ def build_oidc_attestation_cert(
         host_pubkey=host_pubkey,
         keytab_entry=keytab_entry,
         authn_context_ext=(OID_OIDC_AUTHN_CONTEXT, authn_context_der),
+        cert_lifetime=cert_lifetime,
+    )
+
+
+def build_mcp_attestation_cert(
+    user: str,
+    realm: str,
+    original_user: str,
+    request_id: str,
+    host_pubkey,                       # cryptography public key object
+    keytab_entry: KeytabEntry,
+    *,
+    agent_name: str | None = None,
+    agent_model: str | None = None,
+    tool_id: str | None = None,
+    cert_lifetime: int = 300,
+) -> bytes:
+    """
+    Build a DER-encoded MCP S4U2Self attestation X.509 certificate.
+
+    Parameters
+    ----------
+    user:            Kerberos principal name (Subject CN, PKINIT SAN).
+    realm:           Kerberos realm.
+    original_user:   Original username the BOT acts on behalf of.
+    request_id:      Session or request identifier.
+    host_pubkey:     Service host public key (cryptography public key).
+    keytab_entry:    Best keytab entry from get_host_keytab_key().
+    agent_name:      AI agent name (e.g. "claude"), or None.
+    agent_model:     Model identifier (e.g. "opus"), or None.
+    tool_id:         MCP tool identifier (e.g. "rhel-mcp"), or None.
+    cert_lifetime:   Validity window in seconds (capped at 300).
+
+    Returns
+    -------
+    DER-encoded X.509 certificate bytes.
+    """
+    authn_context_der = encode_mcp_authn_context(
+        original_user=original_user,
+        request_id=request_id,
+        agent_name=agent_name,
+        agent_model=agent_model,
+        tool_id=tool_id,
+    )
+    return _build_cert_core(
+        user=user,
+        realm=realm,
+        service_type="mcp",
+        host_pubkey=host_pubkey,
+        keytab_entry=keytab_entry,
+        authn_context_ext=(OID_MCP_AUTHN_CONTEXT, authn_context_der),
         cert_lifetime=cert_lifetime,
     )
 

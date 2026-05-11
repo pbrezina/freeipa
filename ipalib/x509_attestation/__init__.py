@@ -25,6 +25,8 @@ Public API
   KeytabEntry                  dataclass returned by get_host_keytab_key()
   get_host_keytab_key()        open host keytab, select best AES entry
   build_attestation_cert()     SSH-specific attestation cert (backward compat)
+  build_oidc_attestation_cert()  OIDC-specific attestation cert
+  build_mcp_attestation_cert()   MCP BOT attestation cert
   build_service_attestation_cert()
                                generic attestation cert for any service type
   acquire_s4u_creds()          GSSAPI S4U2Self acquisition
@@ -42,6 +44,7 @@ from .keytab import KeytabEntry, get_host_keytab_key
 from .cert import (
     build_attestation_cert,
     build_oidc_attestation_cert,
+    build_mcp_attestation_cert,
     build_service_attestation_cert,
 )
 from .gss import acquire_s4u_creds, request_s4u_proxy
@@ -51,6 +54,7 @@ __all__ = [
     "get_host_keytab_key",
     "build_attestation_cert",
     "build_oidc_attestation_cert",
+    "build_mcp_attestation_cert",
     "build_service_attestation_cert",
     "acquire_s4u_creds",
     "request_s4u_proxy",
