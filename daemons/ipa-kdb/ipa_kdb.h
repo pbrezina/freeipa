@@ -235,6 +235,11 @@ struct ipadb_s4u_data {
     char **auth_methods;       /* NULL-terminated RFC 8176 AMR list, e.g. {"pwd","otp",NULL} */
     char *ssh_key_fingerprint; /* SSH-specific: "SHA256:…", NULL otherwise */
     char *ssh_client_address;  /* SSH-specific: "ip:port", NULL otherwise */
+    char *mcp_original_user;   /* MCP-specific: original username */
+    char *mcp_request_id;      /* MCP-specific: request/session id */
+    char *mcp_agent_name;      /* MCP-specific: agent name */
+    char *mcp_agent_model;     /* MCP-specific: model identifier */
+    char *mcp_tool_id;         /* MCP-specific: MCP tool identifier */
 };
 
 #define IPA_E_DATA_MAGIC 0x0eda7a

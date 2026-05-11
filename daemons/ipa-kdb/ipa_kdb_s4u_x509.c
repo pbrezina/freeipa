@@ -1858,6 +1858,30 @@ mcp_s4u_verify_context(krb5_context kcontext,
 
     ied->s4u->attested = true;
 
+    /* Populate MCP metadata from the cert extension for auth indicators. */
+    if (authn) {
+        if (authn->original_user)
+            ied->s4u->mcp_original_user =
+                strndup((char *)authn->original_user->data,
+                        (size_t)authn->original_user->length);
+        if (authn->request_id)
+            ied->s4u->mcp_request_id =
+                strndup((char *)authn->request_id->data,
+                        (size_t)authn->request_id->length);
+        if (authn->agent_name)
+            ied->s4u->mcp_agent_name =
+                strndup((char *)authn->agent_name->data,
+                        (size_t)authn->agent_name->length);
+        if (authn->agent_model)
+            ied->s4u->mcp_agent_model =
+                strndup((char *)authn->agent_model->data,
+                        (size_t)authn->agent_model->length);
+        if (authn->tool_id)
+            ied->s4u->mcp_tool_id =
+                strndup((char *)authn->tool_id->data,
+                        (size_t)authn->tool_id->length);
+    }
+
     *entry_out = user_entry;
     return 0;
 }

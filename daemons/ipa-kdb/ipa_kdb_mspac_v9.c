@@ -26,6 +26,7 @@
 #include "ipa_kdb.h"
 #include <talloc.h>
 #include <unicase.h>
+#include <string.h>
 #include "util/time.h"
 #include "gen_ndr/ndr_krb5pac.h"
 
@@ -242,6 +243,72 @@ ipadb_v9_issue_pac(krb5_context context, unsigned int flags,
                     merged[n]     = ind;
                     merged[n + 1] = NULL;
                     *auth_indicators = merged;
+                }
+            }
+
+            /* Emit MCP bot metadata as additional indicators.
+             * Format: mcp-bot-<field>:<value> */
+            if (ied->s4u->service_type &&
+                strcmp(ied->s4u->service_type, "mcp") == 0) {
+                const struct {
+                    const char *prefix;
+                    const char *value;
+                } mcp_fields[] = {
+                    { "mcp-bot-user",  ied->s4u->mcp_original_user },
+                    { "mcp-bot-agent", ied->s4u->mcp_agent_name },
+                    { "mcp-bot-model", ied->s4u->mcp_agent_model },
+                    { "mcp-bot-tool",  ied->s4u->mcp_tool_id },
+                    { NULL, NULL }
+                };
+
+                for (int fi = 0; mcp_fields[fi].prefix; fi++) {
+                    if (!mcp_fields[fi].value)
+                        continue;
+
+                    char *indstr = NULL;
+                    krb5_data *ind = NULL;
+
+                    if (asprintf(&indstr, "%s:%s",
+                                 mcp_fields[fi].prefix,
+                                 mcp_fields[fi].value) == -1) {
+                        kerr = ENOMEM;
+                        goto done;
+                    }
+
+                    ind = malloc(sizeof(krb5_data));
+                    if (ind == NULL) {
+                        free(indstr);
+                        kerr = ENOMEM;
+                        goto done;
+                    }
+                    ind->magic  = KV5M_DATA;
+                    ind->data   = indstr;
+                    ind->length = strlen(indstr);
+
+                    if (*auth_indicators == NULL) {
+                        krb5_data **inds = calloc(2, sizeof(krb5_data *));
+                        if (inds == NULL) {
+                            free(indstr); free(ind);
+                            kerr = ENOMEM;
+                            goto done;
+                        }
+                        inds[0] = ind;
+                        inds[1] = NULL;
+                        *auth_indicators = inds;
+                    } else {
+                        size_t n = 0;
+                        while ((*auth_indicators)[n]) n++;
+                        krb5_data **merged = realloc(*auth_indicators,
+                                                     (n + 2) * sizeof(krb5_data *));
+                        if (!merged) {
+                            free(indstr); free(ind);
+                            kerr = ENOMEM;
+                            goto done;
+                        }
+                        merged[n]     = ind;
+                        merged[n + 1] = NULL;
+                        *auth_indicators = merged;
+                    }
                 }
             }
         }

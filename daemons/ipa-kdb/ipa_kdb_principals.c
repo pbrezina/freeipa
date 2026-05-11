@@ -2486,6 +2486,11 @@ void ipadb_free_principal_e_data(krb5_context kcontext, krb5_octet *e_data)
 	    free(ied->s4u->auth_methods);
 	    free(ied->s4u->ssh_key_fingerprint);
 	    free(ied->s4u->ssh_client_address);
+	    free(ied->s4u->mcp_original_user);
+	    free(ied->s4u->mcp_request_id);
+	    free(ied->s4u->mcp_agent_name);
+	    free(ied->s4u->mcp_agent_model);
+	    free(ied->s4u->mcp_tool_id);
 	    free(ied->s4u);
 	}
 	for (i = 0; i < ied->n_s4u_ind_limits; i++)
