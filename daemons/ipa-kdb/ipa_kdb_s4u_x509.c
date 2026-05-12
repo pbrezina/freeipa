@@ -1824,7 +1824,7 @@ mcp_s4u_verify_context(krb5_context kcontext,
         snprintf(rand_hex, sizeof(rand_hex), "%02x%02x%02x%02x",
                  rand_bytes[0], rand_bytes[1], rand_bytes[2], rand_bytes[3]);
 
-        /* Build BOT-<uidNumber>-<random>@REALM (must fit 32 char username). */
+        /* Build BOT-<uidNumber>-<random> (must fit 32 char POSIX limit). */
         const krb5_data *realm = krb5_princ_realm(kcontext, hint_princ);
         char bot_name[64];
         snprintf(bot_name, sizeof(bot_name), "BOT-%d-%s", uid_number, rand_hex);

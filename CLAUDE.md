@@ -207,9 +207,9 @@ ff7056e8d poc: encode MCP bot metadata as auth indicators
    `hint_princ` and cert Subject CN are the original user (e.g. "admin"),
    so the standard CN-based lookup works.
 
-4. **32-char username limit**: BOT principal names must fit within 32
-   characters (POSIX username limit). `BOT-<uidNumber>-<8hexchars>` is
-   designed to fit within this.
+4. **32-char username limit**: The username part (`BOT-<uidNumber>-<8hexchars>`)
+   must fit within 32 characters (POSIX username limit). The `@REALM`
+   suffix is not included in this limit.
 
 5. **ASN.1 compatibility**: Python DER encoding in `asn1.py` must produce
    byte-for-byte identical output to the C code. When adding fields, update
