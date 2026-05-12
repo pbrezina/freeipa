@@ -30,6 +30,8 @@
 #include <string.h>
 #include <stdlib.h>
 #include <arpa/inet.h>
+#include <pthread.h>
+#include <time.h>
 
 #include <openssl/x509.h>
 #include <openssl/x509v3.h>
@@ -56,6 +58,127 @@
 #define OID_SSH_AUTHN_CONTEXT               "2.16.840.1.113730.3.8.15.3.2"
 #define OID_OIDC_AUTHN_CONTEXT              "2.16.840.1.113730.3.8.15.3.3"
 #define OID_MCP_AUTHN_CONTEXT               "2.16.840.1.113730.3.8.15.3.4"
+
+/* BOT metadata cache TTL in seconds (matches cert lifetime). */
+#define BOT_CACHE_TTL 300
+
+/* ------------------------------------------------------------------ *
+ * BOT metadata cache                                                  *
+ *                                                                     *
+ * When the MCP handler creates a BOT principal, the agent metadata    *
+ * (agent name, model, tool) is stored in this in-memory cache.  When  *
+ * a subsequent S4U2Self request (e.g. from SSH) arrives for the same  *
+ * BOT principal on the same KDC, the cache provides full metadata for *
+ * auth indicator emission.  If the request lands on a different KDC   *
+ * (cache miss), the KDC falls back to deriving base indicators from   *
+ * the BOT principal name (uidNumber → LDAP → username).               *
+ * ------------------------------------------------------------------ */
+
+struct bot_cache_entry {
+    char *bot_name;         /* "BOT-987456321-a1b2c3d4" */
+    char *original_user;
+    char *agent_name;       /* NULL if not provided */
+    char *agent_model;      /* NULL if not provided */
+    char *tool_id;          /* NULL if not provided */
+    time_t expiry;
+    struct bot_cache_entry *next;
+};
+
+static struct bot_cache_entry *bot_cache_head = NULL;
+static pthread_mutex_t bot_cache_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void
+bot_cache_free_entry(struct bot_cache_entry *e)
+{
+    if (!e)
+        return;
+    free(e->bot_name);
+    free(e->original_user);
+    free(e->agent_name);
+    free(e->agent_model);
+    free(e->tool_id);
+    free(e);
+}
+
+/* Prune expired entries (caller must hold bot_cache_lock). */
+static void
+bot_cache_prune_locked(void)
+{
+    time_t now = time(NULL);
+    struct bot_cache_entry **pp = &bot_cache_head;
+
+    while (*pp) {
+        if ((*pp)->expiry <= now) {
+            struct bot_cache_entry *expired = *pp;
+            *pp = expired->next;
+            bot_cache_free_entry(expired);
+        } else {
+            pp = &(*pp)->next;
+        }
+    }
+}
+
+static void
+bot_cache_store(const char *bot_name,
+                const char *original_user,
+                const char *agent_name,
+                const char *agent_model,
+                const char *tool_id)
+{
+    struct bot_cache_entry *e;
+
+    e = calloc(1, sizeof(*e));
+    if (!e)
+        return;
+
+    e->bot_name = strdup(bot_name);
+    e->original_user = original_user ? strdup(original_user) : NULL;
+    e->agent_name = agent_name ? strdup(agent_name) : NULL;
+    e->agent_model = agent_model ? strdup(agent_model) : NULL;
+    e->tool_id = tool_id ? strdup(tool_id) : NULL;
+    e->expiry = time(NULL) + BOT_CACHE_TTL;
+
+    if (!e->bot_name) {
+        bot_cache_free_entry(e);
+        return;
+    }
+
+    pthread_mutex_lock(&bot_cache_lock);
+    bot_cache_prune_locked();
+    e->next = bot_cache_head;
+    bot_cache_head = e;
+    pthread_mutex_unlock(&bot_cache_lock);
+}
+
+/*
+ * Look up BOT metadata from the cache.
+ * Returns a heap-allocated copy or NULL on miss.  Caller frees with
+ * bot_cache_free_entry().
+ */
+static struct bot_cache_entry *
+bot_cache_lookup(const char *bot_name)
+{
+    struct bot_cache_entry *result = NULL;
+    time_t now = time(NULL);
+
+    pthread_mutex_lock(&bot_cache_lock);
+    for (struct bot_cache_entry *e = bot_cache_head; e; e = e->next) {
+        if (e->expiry > now && strcmp(e->bot_name, bot_name) == 0) {
+            /* Return a copy so the caller can use it outside the lock. */
+            result = calloc(1, sizeof(*result));
+            if (result) {
+                result->bot_name = strdup(e->bot_name);
+                result->original_user = e->original_user ? strdup(e->original_user) : NULL;
+                result->agent_name = e->agent_name ? strdup(e->agent_name) : NULL;
+                result->agent_model = e->agent_model ? strdup(e->agent_model) : NULL;
+                result->tool_id = e->tool_id ? strdup(e->tool_id) : NULL;
+            }
+            break;
+        }
+    }
+    pthread_mutex_unlock(&bot_cache_lock);
+    return result;
+}
 
 
 /* ------------------------------------------------------------------ *
@@ -1888,6 +2011,26 @@ mcp_s4u_verify_context(krb5_context kcontext,
                         (size_t)authn->oauth2_token->length);
     }
 
+    /* Cache the MCP metadata keyed by BOT principal name so that
+     * subsequent S4U requests (e.g. SSH) on the same KDC can emit
+     * full auth indicators for this BOT identity. */
+    {
+        const krb5_data *comp = krb5_princ_component(kcontext,
+                                                      user_entry->princ, 0);
+        if (comp && comp->data) {
+            char name_buf[64];
+            size_t len = (size_t)comp->length < sizeof(name_buf) - 1
+                         ? (size_t)comp->length : sizeof(name_buf) - 1;
+            memcpy(name_buf, comp->data, len);
+            name_buf[len] = '\0';
+            bot_cache_store(name_buf,
+                            ied->s4u->mcp_original_user,
+                            ied->s4u->mcp_agent_name,
+                            ied->s4u->mcp_agent_model,
+                            ied->s4u->mcp_tool_id);
+        }
+    }
+
     *entry_out = user_entry;
     return 0;
 }
@@ -2488,6 +2631,210 @@ ipadb_get_s4u_x509_principal(krb5_context kcontext,
     return ipadb_get_s4u_x509_principal_impl(
         kcontext, client_cert, princ, flags, entry_out,
         EVP_default_properties_is_fips_enabled(NULL));
+}
+
+/* ------------------------------------------------------------------ *
+ * BOT auth indicator enrichment for non-MCP S4U requests.             *
+ *                                                                     *
+ * When SSH (or any service) does S4U2Self for a BOT-xxx principal,    *
+ * this function emits MCP bot auth indicators:                        *
+ *   - Cache hit (same KDC): full metadata indicators                  *
+ *   - Cache miss (different KDC): base indicators derived from the    *
+ *     BOT principal name (uidNumber → LDAP → username)                *
+ * ------------------------------------------------------------------ */
+krb5_error_code
+ipadb_bot_enrich_indicators(krb5_context kcontext,
+                            krb5_const_principal client_princ,
+                            krb5_data ***auth_indicators)
+{
+    const krb5_data *first;
+    const char *name;
+    const char *last_dash;
+    char bot_name[64];
+    size_t len;
+    struct bot_cache_entry *cached = NULL;
+
+    if (!client_princ || !auth_indicators)
+        return 0;
+
+    if (krb5_princ_size(kcontext, client_princ) != 1)
+        return 0;
+
+    first = krb5_princ_component(kcontext, client_princ, 0);
+    if (!first || first->length < 6 ||
+        strncmp(first->data, "BOT-", 4) != 0)
+        return 0;
+
+    /* Extract the BOT name (without @REALM). */
+    len = (size_t)first->length < sizeof(bot_name) - 1
+          ? (size_t)first->length : sizeof(bot_name) - 1;
+    memcpy(bot_name, first->data, len);
+    bot_name[len] = '\0';
+
+    /* Try the local cache first (same KDC that handled MCP S4U). */
+    cached = bot_cache_lookup(bot_name);
+
+    /* Build the list of indicators to emit. */
+    const struct {
+        const char *prefix;
+        const char *value;
+    } fields[] = {
+        { "mcp-bot-user",  cached ? cached->original_user : NULL },
+        { "mcp-bot-agent", cached ? cached->agent_name : NULL },
+        { "mcp-bot-model", cached ? cached->agent_model : NULL },
+        { "mcp-bot-tool",  cached ? cached->tool_id : NULL },
+        { NULL, NULL }
+    };
+
+    /* Cache miss fallback: derive username from uidNumber in the
+     * BOT principal name via LDAP lookup. */
+    char *fallback_user = NULL;
+    if (!cached) {
+        /* Parse uidNumber from "BOT-<uidNumber>-<random>". */
+        name = bot_name;
+        last_dash = NULL;
+        for (size_t i = 4; i < len; i++) {
+            if (name[i] == '-')
+                last_dash = &name[i];
+        }
+        if (last_dash && last_dash != &name[4]) {
+            char uid_buf[32];
+            size_t uid_len = (size_t)(last_dash - &name[4]);
+            if (uid_len > 0 && uid_len < sizeof(uid_buf)) {
+                memcpy(uid_buf, &name[4], uid_len);
+                uid_buf[uid_len] = '\0';
+
+                /* Verify all digits. */
+                bool valid = true;
+                for (size_t i = 0; i < uid_len; i++) {
+                    if (uid_buf[i] < '0' || uid_buf[i] > '9') {
+                        valid = false;
+                        break;
+                    }
+                }
+
+                if (valid) {
+                    struct ipadb_context *ipactx = ipadb_get_context(kcontext);
+                    if (ipactx && ipactx->lcontext) {
+                        char filter[128];
+                        char *attrs[] = { "uid", NULL };
+                        LDAPMessage *res = NULL;
+
+                        snprintf(filter, sizeof(filter),
+                                 "(uidNumber=%s)", uid_buf);
+                        if (ipadb_simple_search(ipactx,
+                                                ipactx->accounts_base,
+                                                LDAP_SCOPE_SUBTREE,
+                                                filter, attrs, &res) == 0
+                            && res) {
+                            LDAPMessage *le = ldap_first_entry(
+                                ipactx->lcontext, res);
+                            if (le)
+                                ipadb_ldap_attr_to_str(ipactx->lcontext, le,
+                                                       "uid", &fallback_user);
+                            ldap_msgfree(res);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* Emit "mcp-authn:bot" indicator for all BOT principals. */
+    {
+        char *indstr = strdup("mcp-authn:bot");
+        krb5_data *ind = NULL;
+
+        if (!indstr)
+            goto out;
+
+        ind = malloc(sizeof(krb5_data));
+        if (!ind) {
+            free(indstr);
+            goto out;
+        }
+        ind->magic  = KV5M_DATA;
+        ind->data   = indstr;
+        ind->length = strlen(indstr);
+
+        if (*auth_indicators == NULL) {
+            krb5_data **inds = calloc(2, sizeof(krb5_data *));
+            if (!inds) {
+                free(indstr); free(ind);
+                goto out;
+            }
+            inds[0] = ind;
+            inds[1] = NULL;
+            *auth_indicators = inds;
+        } else {
+            size_t n = 0;
+            while ((*auth_indicators)[n]) n++;
+            krb5_data **merged = realloc(*auth_indicators,
+                                         (n + 2) * sizeof(krb5_data *));
+            if (!merged) {
+                free(indstr); free(ind);
+                goto out;
+            }
+            merged[n]     = ind;
+            merged[n + 1] = NULL;
+            *auth_indicators = merged;
+        }
+    }
+
+    /* Emit metadata indicators. For cache hit: full set.
+     * For cache miss: only mcp-bot-user (from LDAP fallback). */
+    for (int fi = 0; fields[fi].prefix; fi++) {
+        const char *value = fields[fi].value;
+        char *indstr = NULL;
+        krb5_data *ind = NULL;
+
+        /* For cache miss, override mcp-bot-user with fallback. */
+        if (!cached && strcmp(fields[fi].prefix, "mcp-bot-user") == 0)
+            value = fallback_user;
+
+        if (!value)
+            continue;
+
+        if (asprintf(&indstr, "%s:%s", fields[fi].prefix, value) == -1)
+            goto out;
+
+        ind = malloc(sizeof(krb5_data));
+        if (!ind) {
+            free(indstr);
+            goto out;
+        }
+        ind->magic  = KV5M_DATA;
+        ind->data   = indstr;
+        ind->length = strlen(indstr);
+
+        if (*auth_indicators == NULL) {
+            krb5_data **inds = calloc(2, sizeof(krb5_data *));
+            if (!inds) {
+                free(indstr); free(ind);
+                goto out;
+            }
+            inds[0] = ind;
+            inds[1] = NULL;
+            *auth_indicators = inds;
+        } else {
+            size_t n = 0;
+            while ((*auth_indicators)[n]) n++;
+            krb5_data **merged = realloc(*auth_indicators,
+                                         (n + 2) * sizeof(krb5_data *));
+            if (!merged) {
+                free(indstr); free(ind);
+                goto out;
+            }
+            merged[n]     = ind;
+            merged[n + 1] = NULL;
+            *auth_indicators = merged;
+        }
+    }
+
+out:
+    bot_cache_free_entry(cached);
+    free(fallback_user);
+    return 0;
 }
 
 #endif /* BUILD_IPA_S4U_X509 */

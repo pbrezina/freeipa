@@ -311,6 +311,21 @@ ipadb_v9_issue_pac(krb5_context context, unsigned int flags,
                     }
                 }
             }
+
+            /* For non-MCP services (e.g. SSH) handling a BOT principal,
+             * enrich auth indicators from the local BOT cache (full
+             * metadata if the MCP S4U was on this KDC) or fall back to
+             * base indicators derived from the principal name. */
+            if (!ied->s4u->service_type ||
+                strcmp(ied->s4u->service_type, "mcp") != 0) {
+#ifdef BUILD_IPA_S4U_X509
+                kerr = ipadb_bot_enrich_indicators(context,
+                                                   client->princ,
+                                                   auth_indicators);
+                if (kerr)
+                    goto done;
+#endif
+            }
         }
     }
 

@@ -538,6 +538,9 @@ krb5_error_code ipadb_get_s4u_x509_principal(krb5_context kcontext,
                                               krb5_const_principal princ,
                                               unsigned int flags,
                                               krb5_db_entry **entry_out);
+krb5_error_code ipadb_bot_enrich_indicators(krb5_context kcontext,
+                                            krb5_const_principal client_princ,
+                                            krb5_data ***auth_indicators);
 #endif
 
 int ipadb_string_to_sid(const char *str, struct dom_sid *sid);
