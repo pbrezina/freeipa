@@ -99,6 +99,13 @@ krb5_error_code ipadb_simple_search(struct ipadb_context *ipactx,
     return (krb5_error_code)(uintptr_t)mock();
 }
 
+int ipadb_ldap_attr_to_int(LDAP *lcontext, LDAPMessage *le,
+                           char *attrname, int *result)
+{
+    *result = (int)(intptr_t)mock();
+    return (int)(intptr_t)mock();
+}
+
 /*
  * krb5_dbe_decrypt_key_data: return a fresh copy of the keyblock supplied
  * via will_return().  The copy is malloc'd so krb5_free_keyblock_contents()
