@@ -115,15 +115,62 @@ emitted as an auth indicator (indicators are short labels, not data carriers).
 
 ### Auth Indicators (PoC)
 
-MCP bot metadata is encoded as Kerberos auth indicators in the PAC
-(`ipa_kdb_mspac_v9.c`). This is a PoC approach — production should use a
-custom field in AD-IF-RELEVANT.
+MCP bot metadata is encoded as Kerberos auth indicators via
+`ipadb_v9_issue_pac()` in `ipa_kdb_mspac_v9.c`. This is a PoC approach —
+production should use a custom field in AD-IF-RELEVANT.
 
 Format: `mcp-bot-<field>:<value>`
+- `mcp-authn:bot` (always emitted for BOT principals)
 - `mcp-bot-user:admin`
 - `mcp-bot-agent:claude`
 - `mcp-bot-model:opus`
 - `mcp-bot-tool:rhel-mcp`
+
+The `oauth2Token` is NOT emitted as an indicator — indicators are short
+labels, not data carriers.
+
+### BOT Indicator Enrichment Across Delegation Chains
+
+**Problem**: When MCP→SSH delegation happens (MCP does S4U2Self for BOT,
+then S4U2Proxy to SSH, SSH does its own S4U2Self for the BOT principal),
+the SSH-issued ticket would lack MCP bot indicators because SSH's S4U is
+a completely independent exchange with no link to the original MCP flow.
+
+**Solution**: Two-tier best-effort enrichment in
+`ipadb_bot_enrich_indicators()` (`ipa_kdb_s4u_x509.c`), called from
+`ipadb_v9_issue_pac()` for any non-MCP attested S4U request with a
+BOT- principal:
+
+1. **Cache hit** (same KDC that handled MCP S4U): full metadata from
+   the in-memory BOT cache → all `mcp-bot-*` indicators emitted.
+2. **Cache miss** (different KDC or cache expired): base indicators
+   derived from the BOT principal name — parse uidNumber from
+   `BOT-<uidNumber>-<random>`, LDAP lookup `(uidNumber=N)` for `uid`
+   attribute → emit `mcp-authn:bot` + `mcp-bot-user:<username>`.
+
+| Scenario | Indicators emitted |
+|---|---|
+| Direct MCP S4U | `mcp-bot-user`, `mcp-bot-agent`, `mcp-bot-model`, `mcp-bot-tool` |
+| SSH S4U for BOT, cache hit | `mcp-authn:bot` + same as above |
+| SSH S4U for BOT, cache miss | `mcp-authn:bot`, `mcp-bot-user:<username>` |
+
+### BOT Metadata Cache
+
+In-memory linked list in `ipa_kdb_s4u_x509.c` (static global):
+- **Key**: BOT principal name (e.g. `BOT-987456321-a1b2c3d4`)
+- **Value**: `original_user`, `agent_name`, `agent_model`, `tool_id`
+- **TTL**: 300 seconds (matches cert lifetime, `BOT_CACHE_TTL`)
+- **Thread safety**: `pthread_mutex_t` with `PTHREAD_MUTEX_INITIALIZER`
+- **GC**: expired entries pruned lazily on each `bot_cache_store()` call
+- **Populated by**: `mcp_s4u_verify_context()` after constructing the
+  BOT principal
+- **Read by**: `ipadb_bot_enrich_indicators()` during non-MCP S4U
+
+Design rationale: the cache is local to each KDC instance (no LDAP
+replication, no distributed state). If the SSH S4U lands on a different
+KDC, the cache miss fallback provides the essential `mcp-bot-user`
+indicator from LDAP. This avoids replication race conditions while
+preserving full metadata on the happy path (same KDC).
 
 ### ipadb_s4u_data Fields for MCP
 
@@ -179,16 +226,20 @@ deee9892a poc: dynamic BOT-<uidNumber>-<random> principal resolution
 ff7056e8d poc: encode MCP bot metadata as auth indicators
 3e936f31b poc: add build_mcp_attestation_cert() Python shortcut
 0bcc7fd0e poc: add OAuth2 token field to MCP attestation certificate
+47452e1bc poc: add ipadb_ldap_attr_to_int stub for S4U X.509 tests
+632a59bbc fix: clarify 32-char limit excludes @REALM suffix
+c1b63373a poc: enrich BOT auth indicators across S4U delegation chains
 ```
 
 ## Key Files
 
 | File | What it does |
 |---|---|
-| `daemons/ipa-kdb/ipa_kdb_s4u_x509.c` | S4U X.509 attestation: ASN.1 structs, handler table, per-service verify callbacks |
+| `daemons/ipa-kdb/ipa_kdb_s4u_x509.c` | S4U X.509 attestation: ASN.1 structs, handler table, per-service verify callbacks, BOT cache, `ipadb_bot_enrich_indicators()` |
 | `daemons/ipa-kdb/ipa_kdb_principals.c` | `ipadb_get_principal()` with BOT-to-user and user-to-BOT switching |
-| `daemons/ipa-kdb/ipa_kdb.h` | `struct ipadb_s4u_data` with MCP fields |
-| `daemons/ipa-kdb/ipa_kdb_mspac_v9.c` | PAC issuance, auth indicator emission for MCP |
+| `daemons/ipa-kdb/ipa_kdb.h` | `struct ipadb_s4u_data` with MCP fields, `ipadb_bot_enrich_indicators()` declaration |
+| `daemons/ipa-kdb/ipa_kdb_mspac_v9.c` | PAC issuance, auth indicator emission for MCP, calls `ipadb_bot_enrich_indicators()` for BOT principals |
+| `daemons/ipa-kdb/tests/ipa_kdb_s4u_x509_tests.c` | cmocka test stubs for S4U X.509 unit tests |
 | `ipalib/x509_attestation/asn1.py` | Python DER encoding: OIDs, `encode_mcp_authn_context()` |
 | `ipalib/x509_attestation/cert.py` | Python cert builder: `build_mcp_attestation_cert()` |
 | `ipalib/x509_attestation/__init__.py` | Public API exports |
@@ -214,3 +265,19 @@ ff7056e8d poc: encode MCP bot metadata as auth indicators
 5. **ASN.1 compatibility**: Python DER encoding in `asn1.py` must produce
    byte-for-byte identical output to the C code. When adding fields, update
    both sides and keep tag numbers synchronized.
+
+6. **Test stubs**: `ipa_kdb_s4u_x509_tests` `#include`s `ipa_kdb_s4u_x509.c`
+   directly to access static functions, but does NOT link `ipa_kdb_common.c`.
+   Any function from `ipa_kdb_common.c` called by code in `ipa_kdb_s4u_x509.c`
+   needs a cmocka mock stub in the test file (e.g. `ipadb_ldap_attr_to_int`,
+   `ipadb_ldap_attr_to_str`). LTO will pull in all static functions even if
+   no test calls them.
+
+7. **BOT indicator enrichment**: `ipadb_bot_enrich_indicators()` is called
+   for ALL attested S4U requests where service_type != "mcp". It silently
+   returns 0 if the principal is not a BOT (no BOT- prefix). Don't add
+   a BOT- check at the call site — the function handles it internally.
+
+8. **pthread in KDB plugin**: The BOT cache uses `pthread_mutex_t`.
+   The MIT KDC may process requests concurrently, so all cache access
+   must be under the mutex. No other code in the KDB plugin uses pthreads.
