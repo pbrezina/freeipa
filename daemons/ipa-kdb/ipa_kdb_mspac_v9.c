@@ -255,6 +255,7 @@ ipadb_v9_issue_pac(krb5_context context, unsigned int flags,
                     const char *value;
                 } mcp_fields[] = {
                     { "mcp-bot-user",  ied->s4u->mcp_original_user },
+                    { "mcp-bot-request-id", ied->s4u->mcp_request_id },
                     { "mcp-bot-agent", ied->s4u->mcp_agent_name },
                     { "mcp-bot-model", ied->s4u->mcp_agent_model },
                     { "mcp-bot-tool",  ied->s4u->mcp_tool_id },
