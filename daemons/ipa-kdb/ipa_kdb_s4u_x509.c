@@ -345,11 +345,12 @@ cert_get_pkinit_san_principal(krb5_context kcontext, X509 *cert,
         if (oname->value->type != V_ASN1_SEQUENCE)
             continue;
 
-        ASN1_STRING *seq = oname->value->value.sequence;
-        if (!seq || !seq->data || seq->length <= 0)
+        const ASN1_STRING *seq = oname->value->value.sequence;
+        if (!seq || !ASN1_STRING_get0_data(seq) || ASN1_STRING_length(seq) <= 0)
             continue;
 
-        if (parse_krb5_principal_name(seq->data, (size_t)seq->length,
+        if (parse_krb5_principal_name(ASN1_STRING_get0_data(seq),
+                                       (size_t)ASN1_STRING_length(seq),
                                        &pstr) < 0) {
             krb5_klog_syslog(LOG_WARNING,
                              "S4U X.509: failed to parse PKINIT SAN DER");
@@ -930,7 +931,8 @@ verify_binding_signature(EVP_PKEY *derived_key,
             goto done;
 
         if (EVP_DigestVerify(mdctx,
-                              binding->data, (size_t)binding->length,
+                              ASN1_STRING_get0_data(binding),
+                              (size_t)ASN1_STRING_length(binding),
                               digest, SHA256_DIGEST_LENGTH) == 1)
             ret = 0;
         else
@@ -1489,8 +1491,9 @@ ssh_s4u_verify_context(krb5_context kcontext,
 
     if (authn) {
         if (authn->auth_method) {
-            char *m = strndup((char *)authn->auth_method->data,
-                              (size_t)authn->auth_method->length);
+            char *m = strndup(
+                (const char *)ASN1_STRING_get0_data(authn->auth_method),
+                (size_t)ASN1_STRING_length(authn->auth_method));
             if (m) {
                 char **am = calloc(2, sizeof(char *));
                 if (am) {
@@ -1510,16 +1513,18 @@ ssh_s4u_verify_context(krb5_context kcontext,
         }
         if (authn->key_fingerprint) {
             ied->s4u->ssh_key_fingerprint =
-                strndup((char *)authn->key_fingerprint->data,
-                        (size_t)authn->key_fingerprint->length);
+                strndup(
+                    (const char *)ASN1_STRING_get0_data(authn->key_fingerprint),
+                    (size_t)ASN1_STRING_length(authn->key_fingerprint));
             if (!ied->s4u->ssh_key_fingerprint)
                 krb5_klog_syslog(LOG_WARNING,
                                  "S4U X.509: OOM copying key_fingerprint");
         }
         if (authn->client_address) {
             ied->s4u->ssh_client_address =
-                strndup((char *)authn->client_address->data,
-                        (size_t)authn->client_address->length);
+                strndup(
+                    (const char *)ASN1_STRING_get0_data(authn->client_address),
+                    (size_t)ASN1_STRING_length(authn->client_address));
             if (!ied->s4u->ssh_client_address)
                 krb5_klog_syslog(LOG_WARNING,
                                  "S4U X.509: OOM copying client_address");
@@ -1628,7 +1633,8 @@ oidc_s4u_verify_context(krb5_context kcontext,
                     sk_ASN1_UTF8STRING_value(authn->amr_values, i);
                 if (!s)
                     continue;
-                char *v = strndup((char *)s->data, (size_t)s->length);
+                char *v = strndup((const char *)ASN1_STRING_get0_data(s),
+                                 (size_t)ASN1_STRING_length(s));
                 if (v)
                     am[j++] = v;
             }

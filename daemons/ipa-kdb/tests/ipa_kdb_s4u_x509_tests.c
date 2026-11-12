@@ -419,8 +419,8 @@ static void test_parse_issuer_binding_valid(void **state)
     assert_int_equal(OBJ_obj2nid(ib->sig_alg->algorithm), NID_ED25519);
     assert_non_null(X509_PUBKEY_get0(ib->service_key));
     assert_non_null(ib->binding);
-    assert_int_equal(ib->binding->length, 32);
-    assert_memory_equal(ib->binding->data, binding, 32);
+    assert_int_equal(ASN1_STRING_length(ib->binding), 32);
+    assert_memory_equal(ASN1_STRING_get0_data(ib->binding), binding, 32);
 
     KERBEROS_SERVICE_ISSUER_BINDING_free(ib);
 }
@@ -916,7 +916,14 @@ static void test_verify_binding_signature_bad_sig(void **state)
     assert_non_null(binding);
 
     /* Corrupt one byte of the signature */
-    binding->data[0] ^= 0xFF;
+    int sig_len = ASN1_STRING_length(binding);
+    assert_true(sig_len > 0);
+    unsigned char *sig = OPENSSL_memdup(ASN1_STRING_get0_data(binding),
+                                       (size_t)sig_len);
+    assert_non_null(sig);
+    sig[0] ^= 0xFF;
+    assert_int_equal(ASN1_OCTET_STRING_set(binding, sig, sig_len), 1);
+    OPENSSL_free(sig);
 
     ret = verify_binding_signature(pkey, xpk,
                                    "host/host.example.com@EXAMPLE.COM",
